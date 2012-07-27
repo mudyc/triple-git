@@ -168,6 +168,23 @@ void rm(FILE *fs, char *s, char *p, char *o)
 	fflush(fs);
 }
 
+static void fetch_xaa(FILE *fs)
+{
+	char buff[1024*4];
+	
+	fseeko(fs, 0L, SEEK_SET);
+	while (!feof(fs)) {
+		char *s = fgets(buff, sizeof(buff), fs);
+		if (s == NULL)
+			break;
+		char *sp = strchr(s, ' ');
+		size_t len = sp-s;
+		fwrite(s, 1, len, stdout);
+		printf("\n");
+	}
+	fflush(stdout);
+}
+
 static void print_help()
 {
 	g_print("This is triple-git: an RDFstorage on top of git.\n\n"
@@ -212,8 +229,16 @@ int main(int argc, char *argv[])
 			*p = argv[4],
 			*o = argv[5];
 		rm(fs, s,p,o);
+	} else if (g_strcmp0(argv[2], "xaa") == 0) {
+		if (argc != 3) {
+			g_print("Waiting for three arguments.\n\n");
+			print_help();
+			return 1;
+		}
+		fetch_xaa(fs);
 	} else {
 		print_help();
 		return 1;
 	}
+	return 0;
 }
