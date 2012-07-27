@@ -51,6 +51,10 @@ literal is typed or plain.
 These are easy to give from command line and separates easily from URIs.
 The literal is also escaped
 
-the lines are sorted.
+the lines are sorted ála strcmp.
 
+Limitations:
+
+* buffer for one line is 4*1024 bytes. Thus, you cannot insert more
+  than that on single add.
 
