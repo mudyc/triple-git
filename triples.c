@@ -26,10 +26,12 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include <glib.h>
 
 static const char *APP;
+static const char *RDF_FILE;
 
 static off_t file_len(FILE *fs)
 {
@@ -95,7 +97,11 @@ static off_t find_pos(FILE *fs, char *line)
 	return pos;
 }
 
-void add(FILE *fs, char *subj, char *p, char *o)
+static size_t smin(size_t a, off_t b) {
+	return a <= b? a: (size_t)b;
+}
+
+static int add(FILE *fs, char *subj, char *p, char *o)
 {
 	char line_add[1024*4];
 	snprintf(line_add, sizeof(line_add), "%s %s %s\n", subj,p,o);
@@ -108,34 +114,36 @@ void add(FILE *fs, char *subj, char *p, char *o)
 	if (strcmp(s, line_add) == 0)
 		exit(0);
 
-	//printf("pos: %zd\n", seek);
-
-
-	// write rest of the file to temp
-	FILE *rest = tmpfile();
+	// generate a new file
+	char *new_file = tmpnam(NULL);
+	FILE *new = fopen(new_file, "w");
 	size_t r, w;
+	fseeko(fs, 0L, SEEK_SET);
+	do {
+		r = fread(buff, 1, smin(sizeof(buff), seek-ftello(fs)), fs);
+		w = fwrite(buff, 1, r, new);
+	} while (w > 0);
+
+	// make addition
+	fwrite(line_add, strlen(line_add), 1, new);
+
+	// write rest of the file to new file
+	FILE *rest = tmpfile();
 	fseeko(fs, seek, SEEK_SET);
 	do {
 		r = fread(buff, 1, sizeof(buff), fs);
-		w = fwrite(buff, 1, r, rest);
+		w = fwrite(buff, 1, r, new);
 	} while (w > 0);
-	fflush(rest);
+	fflush(new);
 
-	// make addition
-	fseeko(fs, seek, SEEK_SET);
-	fwrite(line_add, strlen(line_add), 1, fs);
-
-	// copy rest back
-	fseeko(rest, 0L, SEEK_SET);
-	do {
-		r = fread(buff, 1, sizeof(buff), rest);
-		w = fwrite(buff, 1, r, fs);
-	} while (w > 0);
-	fflush(fs);
+	int ret = rename(new_file, RDF_FILE);
+	remove(new_file);
+	return ret;
 }
 
-void rm(FILE *fs, char *s, char *p, char *o)
+static int rm(FILE *fs, char *s, char *p, char *o)
 {
+	char tmp[1024];
 	char line_rm[1024*4];
 	snprintf(line_rm, sizeof(line_rm), "%s %s %s\n", s,p,o);
 
@@ -144,28 +152,36 @@ void rm(FILE *fs, char *s, char *p, char *o)
 
 	char buff[1024*4];
 
-	// write rest of the file to temp
-	FILE *rest = tmpfile();
+	// check that we actually found a one
+	fseeko(fs, seek, SEEK_SET);
+	char *to_be_removed = fgets(buff, sizeof(buff), fs);
+	if (to_be_removed == NULL || strcmp(line_rm, to_be_removed) != 0)
+		return 1;
+
+	// generate a new file
+	char *new_file = tmpnam(tmp);
+	FILE *new = fopen(new_file, "w");
 	size_t r, w;
+	fseeko(fs, 0L, SEEK_SET);
+	do {
+		r = fread(buff, 1, smin(sizeof(buff), seek-ftello(fs)), fs);
+		w = fwrite(buff, 1, r, new);
+	} while (w > 0);
+
+	// move forward removed line.
 	fseeko(fs, seek, SEEK_SET);
 	fseeko(fs, strlen(line_rm), SEEK_CUR);
+
+	// write rest of the file to new file
 	do {
 		r = fread(buff, 1, sizeof(buff), fs);
-		w = fwrite(buff, 1, r, rest);
+		w = fwrite(buff, 1, r, new);
 	} while (w > 0);
-	fflush(rest);
+	fflush(new);
 
-	// seek back
-	fseeko(fs, seek, SEEK_SET);
-
-	// copy rest back
-	fseeko(rest, 0L, SEEK_SET);
-	do {
-		r = fread(buff, 1, sizeof(buff), rest);
-		w = fwrite(buff, 1, r, fs);
-	} while (w > 0);
-	ftruncate(fileno(fs), ftello(fs));
-	fflush(fs);
+	int ret = rename(new_file, RDF_FILE);
+	remove(new_file);
+	return ret;
 }
 
 static void fetch_xaa(FILE *fs)
@@ -185,6 +201,61 @@ static void fetch_xaa(FILE *fs)
 	fflush(stdout);
 }
 
+static void fetch_1xa(FILE *fs, char *subj)
+{
+	char buff[1024*4];
+	char line[1024*4];
+	off_t seek = find_pos(fs, subj);
+	
+	fseeko(fs, seek, SEEK_SET);
+	while (!feof(fs)) {
+		char *s = fgets(buff, sizeof(buff), fs);
+		if (s == NULL)
+			break;
+		char *sp = strchr(s, ' ');
+		size_t len = sp-s + 1;
+		snprintf(line, len, "%s", s);
+		//printf("%s %s %d\n", line, subj, len);
+		if (strcmp(subj, line) != 0)
+			break;
+		s = ++sp;
+		sp = strchr(sp, ' ');
+		len = sp-s;
+		fwrite(s, 1, len, stdout);
+		printf("\n");
+	}
+	fflush(stdout);
+}
+
+static void fetch_11x(FILE *fs, char *subj, char *pred)
+{
+	char buff[1024*4];
+	char line[1024*4];
+	char test[1024*4];
+	snprintf(test, sizeof(test), "%s %s ", subj, pred);
+	off_t seek = find_pos(fs, test);
+	
+	fseeko(fs, seek, SEEK_SET);
+	while (!feof(fs)) {
+		const char *s = fgets(buff, sizeof(buff), fs);
+		if (s == NULL)
+			break;
+		char *sp = strchr(s, ' ');
+		sp++;
+		sp = strchr(sp, ' ');
+		sp++;
+		size_t len = sp-s + 1;
+		snprintf(line, len, "%s", s);
+		//printf("%s %s %d\n", line, test, len);
+		if (strcmp(test, line) != 0)
+			break;
+		len = strlen(s) - (sp - s);
+		fwrite(sp, 1, len, stdout);
+		// last has new line printf("\n");
+	}
+	fflush(stdout);
+}
+
 static void print_help()
 {
 	g_print("This is triple-git: an RDFstorage on top of git.\n\n"
@@ -200,6 +271,7 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 	char *file = argv[1];
+	RDF_FILE = file;
 	FILE *fs = fopen(file, "r+");
 	if (fs == NULL) {
 		g_print("Error opening file %s", file);
@@ -231,11 +303,25 @@ int main(int argc, char *argv[])
 		rm(fs, s,p,o);
 	} else if (g_strcmp0(argv[2], "xaa") == 0) {
 		if (argc != 3) {
-			g_print("Waiting for three arguments.\n\n");
+			g_print("Waiting for two arguments.\n\n");
 			print_help();
 			return 1;
 		}
 		fetch_xaa(fs);
+	} else if (g_strcmp0(argv[2], "1xa") == 0) {
+		if (argc != 4) {
+			g_print("Waiting for three arguments.\n\n");
+			print_help();
+			return 1;
+		}
+		fetch_1xa(fs, argv[3]);
+	} else if (g_strcmp0(argv[2], "11x") == 0) {
+		if (argc != 5) {
+			g_print("Waiting for four arguments.\n\n");
+			print_help();
+			return 1;
+		}
+		fetch_11x(fs, argv[3], argv[4]);
 	} else {
 		print_help();
 		return 1;
