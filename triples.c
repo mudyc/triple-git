@@ -71,17 +71,20 @@ static off_t find_pos_rec(FILE *fs, char *line, off_t a, off_t b)
 	// read next line
 	char buff[1024*4];
 	char *s = fgets(buff, sizeof(buff), fs);
-	if (s == NULL && feof(fs))
+	if (s == NULL && feof(fs)) {
 		return find_pos_rec(fs, line, a, half);
-
+	}
 	int cmp = strcmp(line, s);
 	//printf("line: %d, %s", cmp, s);
 	if (cmp == 0) // line exists already.
 		// we should signal back
 		return ftello(fs) - strlen(line);
 	if (cmp < 0) {
-		if (a == half)
-			return a;
+		if (a == half) {
+			if (a == 0)
+				return 0;
+			return a + 1;
+		}
 		return find_pos_rec(fs, line, a, half);
 	}
 	if (b <= ftello(fs))
@@ -93,6 +96,8 @@ static off_t find_pos_rec(FILE *fs, char *line, off_t a, off_t b)
 static off_t find_pos(FILE *fs, char *line)
 {
 	off_t total_len = file_len(fs);
+	if (total_len == 0)
+		return 0;
 	off_t pos = find_pos_rec(fs, line, 0L, total_len);
 	return pos;
 }
@@ -111,7 +116,7 @@ static int add(FILE *fs, char *subj, char *p, char *o)
 
 	fseeko(fs, seek, SEEK_SET);
 	char *s = fgets(buff, sizeof(buff), fs);
-	if (strcmp(s, line_add) == 0)
+	if (s != NULL && strcmp(s, line_add) == 0)
 		exit(0);
 
 	// generate a new file
@@ -289,7 +294,7 @@ int main(int argc, char *argv[])
 			*s = argv[3],
 			*p = argv[4],
 			*o = argv[5];
-		add(fs, s,p,o);
+		return add(fs, s,p,o);
 	} else if (g_strcmp0(argv[2], "rm") == 0) {
 		if (argc != 6) {
 			g_print("Waiting for five arguments.\n\n");
@@ -300,7 +305,7 @@ int main(int argc, char *argv[])
 			*s = argv[3],
 			*p = argv[4],
 			*o = argv[5];
-		rm(fs, s,p,o);
+		return rm(fs, s,p,o);
 	} else if (g_strcmp0(argv[2], "xaa") == 0) {
 		if (argc != 3) {
 			g_print("Waiting for two arguments.\n\n");
